@@ -1,4 +1,22 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+
+async function loadFromSheets() {
+  try {
+    const res = await fetch('/api/sheets?action=load');
+    if (!res.ok) return null;
+    return await res.json();
+  } catch(e) { return null; }
+}
+
+async function saveToSheets(data) {
+  try {
+    await fetch('/api/sheets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  } catch(e) { console.error('Sheets sync error:', e); }
+}
 
 /* ─── CONFIG ─────────────────────────────────────────── */
 const COMPANIES = [
@@ -580,9 +598,32 @@ function CompanyPanel({ company, data, onChange }) {
 /* ─── APP ROOT ───────────────────────────────────────── */
 export default function App() {
   const [data, setData] = useState(loadData);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+  const syncTimer = useRef(null);
 
-  // Persist every change
-  useEffect(() => { saveData(data); }, [data]);
+  // On mount: load from Sheets (cloud wins over local)
+  useEffect(() => {
+    setSyncing(true);
+    loadFromSheets().then(cloudData => {
+      if (cloudData) { setData(cloudData); saveData(cloudData); }
+      setSyncing(false);
+      setLastSync(new Date());
+    });
+  }, []);
+
+  // On every change: save locally + debounce cloud sync
+  useEffect(() => {
+    saveData(data);
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => {
+      setSyncing(true);
+      saveToSheets(data).then(() => {
+        setSyncing(false);
+        setLastSync(new Date());
+      });
+    }, 1500);
+  }, [data]);
 
   const totalPending = COMPANIES.reduce((acc,c)=>
     acc + data[c.id].clients.reduce((a,cl)=>a+(cl.todos||[]).filter(t=>!t.done).length,0),0);
@@ -625,15 +666,25 @@ export default function App() {
             </div>
           </div>
         </div>
-        {totalPending>0 && (
-          <div style={{
-            background:"linear-gradient(135deg,#FF5A1F,#FF8C00)",
-            color:"#fff",borderRadius:20,padding:"5px 14px",
-            fontSize:12,fontWeight:700,
-          }}>
-            {totalPending} pendiente{totalPending!==1?"s":""}
-          </div>
-        )}
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {syncing && (
+            <span style={{fontSize:11,color:"#AAA",display:"flex",alignItems:"center",gap:4}}>
+              <span style={{display:"inline-block",animation:"spin 0.8s linear infinite"}}>⚙️</span> Sincronizando...
+            </span>
+          )}
+          {!syncing && lastSync && (
+            <span style={{fontSize:11,color:"#BBB"}}>☁️ Sincronizado</span>
+          )}
+          {totalPending>0 && (
+            <div style={{
+              background:"linear-gradient(135deg,#FF5A1F,#FF8C00)",
+              color:"#fff",borderRadius:20,padding:"5px 14px",
+              fontSize:12,fontWeight:700,
+            }}>
+              {totalPending} pendiente{totalPending!==1?"s":""}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Main */}
