@@ -41,27 +41,17 @@ function saveData(d) { try { localStorage.setItem(STORAGE_KEY,JSON.stringify(d))
 /* ─── AI EXTRACT TODOS ───────────────────────────────── */
 async function aiExtractTodos(text, clientName, companyName) {
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch("/api/extract", {
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({
-        model:"claude-sonnet-4-20250514",
-        max_tokens:800,
-        system:`Eres un experto Project Manager. Analiza notas/transcripción de interacción con el cliente "${clientName}" de "${companyName}".
-Extrae TODAS las acciones, tareas, compromisos, seguimientos mencionados.
-Responde ÚNICAMENTE con JSON válido sin backticks ni texto adicional:
-{"todos":[{"text":"descripción clara de la tarea","owner":"Wilmer"}]}
-Máximo 12 tareas. Sin tareas: {"todos":[]}.`,
-        messages:[{role:"user",content:text}],
-      }),
+      body:JSON.stringify({ text, clientName, companyName }),
     });
     const data = await res.json();
-    const raw = data.content?.find(b=>b.type==="text")?.text||"{}";
-    const parsed = JSON.parse(raw.replace(/```json|```/g,"").trim());
-    return (parsed.todos||[]).map(t=>({
+    return (data.todos||[]).map(t=>({
       id:uid(), text:t.text||t, owner:t.owner||"Wilmer", done:false
     }));
   } catch(e) {
+    // Fallback: basic line extraction
     return text.split("\n")
       .filter(l=>l.match(/^[-*•]/))
       .map(l=>({id:uid(),text:l.replace(/^[-*•]\s*/,"").trim(),done:false,owner:"Wilmer"}))
@@ -517,17 +507,36 @@ export default function App() {
   useEffect(()=>{
     setSyncing(true);
     loadFromSheets().then(cloudData=>{
-      if(cloudData){setData(cloudData);saveData(cloudData);}
+      if(cloudData && cloudData._ts){
+        // Compare timestamps: use whichever is newer
+        const local = loadData();
+        const localTs = local._ts || 0;
+        const cloudTs = cloudData._ts || 0;
+        if(cloudTs > localTs){
+          setData(cloudData);
+          saveData(cloudData);
+        }
+        // else keep local (it's newer)
+      } else if(cloudData && cloudData.bgh){
+        // Cloud has data but no timestamp — only use if local is empty
+        const local = loadData();
+        const localHasData = COMPANIES.some(c => local[c.id]?.clients?.length > 0);
+        if(!localHasData){
+          setData(cloudData);
+          saveData(cloudData);
+        }
+      }
       setSyncing(false);setLastSync(new Date());
     });
   },[]);
 
   useEffect(()=>{
-    saveData(data);
+    const stamped = {...data, _ts: Date.now()};
+    saveData(stamped);
     if(syncTimer.current) clearTimeout(syncTimer.current);
     syncTimer.current=setTimeout(()=>{
       setSyncing(true);
-      saveToSheets(data).then(()=>{setSyncing(false);setLastSync(new Date());});
+      saveToSheets(stamped).then(()=>{setSyncing(false);setLastSync(new Date());});
     },1500);
   },[data]);
 
