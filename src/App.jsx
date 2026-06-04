@@ -18,11 +18,23 @@ async function saveToSheets(data) {
 }
 
 /* ─── CONFIG ─────────────────────────────────────────── */
-const COMPANIES = [
+const DEFAULT_COMPANIES = [
   { id:"bgh",     name:"BGH Tech Partner", short:"BGH",       color:"#0057FF", accent:"#E8F0FF", dark:"#002B80", emoji:"🔵" },
-  { id:"valion",  name:"Valion SAS",        short:"Valion",    color:"#00B27A", accent:"#E6F7F2", dark:"#005C3F", emoji:"🟢" },
-  { id:"talktec", name:"Talk Tech SAS",     short:"Talk Tech", color:"#FF5A1F", accent:"#FFF0EB", dark:"#8C2A00", emoji:"🟠" },
+  { id:"valion",  name:"Valion SAS",        short:"Valion",    color:"#F5A623", accent:"#FFF8E8", dark:"#0A1628", emoji:"🟡" },
+  { id:"talktec", name:"Talk Tech SAS",     short:"Talk Tech", color:"#1A1A1A", accent:"#F5F5F5", dark:"#000000", emoji:"⚫" },
 ];
+
+function loadCompanies() {
+  try {
+    const r = localStorage.getItem("roadmap_companies");
+    if (r) return JSON.parse(r);
+  } catch(e) {}
+  return DEFAULT_COMPANIES;
+}
+function saveCompanies(c) { try { localStorage.setItem("roadmap_companies", JSON.stringify(c)); } catch(e){} }
+
+// Use dynamic companies — will be set from App state
+let COMPANIES = loadCompanies();
 const STAGES = ["Prospecto","Contactado","Propuesta","Negociación","Cerrado ✓","Perdido ✗"];
 const STAGE_COLORS = {
   "Prospecto":"#9B9B9B","Contactado":"#3B82F6","Propuesta":"#F59E0B",
@@ -497,36 +509,152 @@ function CompanyPanel({company,data,onChange}) {
   );
 }
 
+/* ─── COMPANY SETTINGS MODAL ─────────────────────────── */
+const EMOJI_OPTIONS = ["🔵","🟢","🟡","🟠","🔴","⚫","🟣","🟤","⚪","🏢","🚀","💼","🌐","⚡","🔥"];
+const COLOR_PRESETS = [
+  "#0057FF","#00B27A","#F5A623","#1A1A1A","#EF4444","#8B5CF6",
+  "#EC4899","#14B8A6","#F59E0B","#10B981","#3B82F6","#6366F1",
+];
+
+function hexToAccent(hex) {
+  // Generate a light accent from hex color
+  return hex + "15";
+}
+
+function CompanySettingsModal({companies, onClose, onSave}) {
+  const [list, setList] = useState(companies.map(c=>({...c})));
+  const [editingId, setEditingId] = useState(null);
+  const [newName, setNewName] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const upd = (id, patch) => setList(list.map(c=>c.id===id?{...c,...patch}:c));
+
+  const addCompany = () => {
+    if(!newName.trim()) return;
+    const id = "co_"+uid();
+    setList([...list, {
+      id, name:newName.trim(), short:newName.trim().split(" ")[0],
+      color:"#0057FF", accent:"#E8F0FF", dark:"#002B80", emoji:"🏢"
+    }]);
+    setNewName(""); setAdding(false);
+  };
+
+  const removeCompany = (id) => {
+    if(list.length<=1) return;
+    setList(list.filter(c=>c.id!==id));
+  };
+
+  const handleSave = () => {
+    const updated = list.map(c=>({...c, accent: c.color+"18", dark: c.color}));
+    onSave(updated);
+    onClose();
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:2000,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={{background:"#fff",borderRadius:18,width:"100%",maxWidth:500,maxHeight:"88vh",display:"flex",flexDirection:"column",boxShadow:"0 24px 80px rgba(0,0,0,0.25)",overflow:"hidden"}}>
+        <div style={{background:"linear-gradient(135deg,#1A1A2E,#16213E)",padding:"16px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+          <div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.5)",fontWeight:600,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:2}}>Configuración</div>
+            <div style={{color:"#fff",fontSize:18,fontWeight:800}}>Gestión de Empresas</div>
+          </div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.1)",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",color:"#fff",fontSize:18}}>×</button>
+        </div>
+
+        <div style={{flex:1,overflowY:"auto",padding:"16px 18px"}}>
+          {list.map(c=>(
+            <div key={c.id} style={{background:"#FAFAFA",borderRadius:12,padding:"14px",marginBottom:10,border:`1.5px solid ${c.color}33`}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                {/* Emoji picker */}
+                <div style={{position:"relative"}}>
+                  <button onClick={()=>setEditingId(editingId===c.id+"emoji"?null:c.id+"emoji")}
+                    style={{width:40,height:40,borderRadius:10,border:`1.5px solid ${c.color}44`,background:c.color+"18",fontSize:20,cursor:"pointer"}}>
+                    {c.emoji}
+                  </button>
+                  {editingId===c.id+"emoji"&&(
+                    <div style={{position:"absolute",top:44,left:0,background:"#fff",borderRadius:10,padding:8,boxShadow:"0 8px 32px rgba(0,0,0,0.15)",display:"flex",flexWrap:"wrap",gap:4,width:180,zIndex:10}}>
+                      {EMOJI_OPTIONS.map(e=>(
+                        <button key={e} onClick={()=>{upd(c.id,{emoji:e});setEditingId(null);}}
+                          style={{width:32,height:32,border:"none",background:"transparent",cursor:"pointer",fontSize:18,borderRadius:6}}>
+                          {e}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {/* Name */}
+                <input value={c.name} onChange={e=>upd(c.id,{name:e.target.value,short:e.target.value.split(" ")[0]})}
+                  style={{flex:1,padding:"8px 10px",borderRadius:8,border:`1.5px solid ${c.color}44`,fontSize:14,fontWeight:700,fontFamily:"inherit",outline:"none",background:"#fff"}}/>
+                {list.length>1&&(
+                  <button onClick={()=>removeCompany(c.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#DDD",fontSize:18,flexShrink:0}}>🗑</button>
+                )}
+              </div>
+              {/* Color */}
+              <div>
+                <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"}}>Color principal</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  {COLOR_PRESETS.map(col=>(
+                    <button key={col} onClick={()=>upd(c.id,{color:col})}
+                      style={{width:26,height:26,borderRadius:6,background:col,border:c.color===col?"3px solid #333":"2px solid transparent",cursor:"pointer",transition:"all 0.1s"}}/>
+                  ))}
+                  <input type="color" value={c.color} onChange={e=>upd(c.id,{color:e.target.value})}
+                    style={{width:26,height:26,borderRadius:6,border:"none",cursor:"pointer",padding:0,background:"none"}} title="Color personalizado"/>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {adding ? (
+            <div style={{display:"flex",gap:8,marginTop:4}}>
+              <input autoFocus value={newName} onChange={e=>setNewName(e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter")addCompany();if(e.key==="Escape")setAdding(false);}}
+                placeholder="Nombre de la nueva empresa..."
+                style={{flex:1,padding:"9px 12px",borderRadius:8,border:"1.5px solid #0057FF55",fontSize:13,fontFamily:"inherit",outline:"none"}}/>
+              <Btn onClick={addCompany} color="#0057FF" small>Agregar</Btn>
+              <Btn onClick={()=>setAdding(false)} color="#999" outline small>✕</Btn>
+            </div>
+          ) : (
+            <button onClick={()=>setAdding(true)} style={{width:"100%",padding:"10px",borderRadius:10,border:"1.5px dashed #DDD",background:"transparent",color:"#999",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginTop:4}}>
+              + Agregar empresa
+            </button>
+          )}
+        </div>
+
+        <div style={{padding:"12px 18px",borderTop:"1px solid #F0F0F0",display:"flex",gap:8,justifyContent:"flex-end",flexShrink:0}}>
+          <Btn onClick={onClose} color="#999" outline>Cancelar</Btn>
+          <Btn onClick={handleSave} color="#0057FF">💾 Guardar cambios</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─── APP ROOT ───────────────────────────────────────── */
 export default function App() {
   const [data,setData]=useState(loadData);
+  const [companies,setCompanies]=useState(loadCompanies);
+  const [showSettings,setShowSettings]=useState(false);
   const [syncing,setSyncing]=useState(false);
   const [lastSync,setLastSync]=useState(null);
   const syncTimer=useRef(null);
+
+  // Keep COMPANIES in sync with state
+  useEffect(()=>{ COMPANIES = companies; saveCompanies(companies); },[companies]);
 
   useEffect(()=>{
     setSyncing(true);
     loadFromSheets().then(cloudData=>{
       if(cloudData && cloudData._ts){
-        // Compare timestamps: use whichever is newer
         const local = loadData();
         const localTs = local._ts || 0;
         const cloudTs = cloudData._ts || 0;
-        if(cloudTs > localTs){
-          setData(cloudData);
-          saveData(cloudData);
-        }
-        // else keep local (it's newer)
+        if(cloudTs > localTs){ setData(cloudData); saveData(cloudData); }
       } else if(cloudData && cloudData.bgh){
-        // Cloud has data but no timestamp — only use if local is empty
         const local = loadData();
-        const localHasData = COMPANIES.some(c => local[c.id]?.clients?.length > 0);
-        if(!localHasData){
-          setData(cloudData);
-          saveData(cloudData);
-        }
+        const localHasData = companies.some(c => local[c.id]?.clients?.length > 0);
+        if(!localHasData){ setData(cloudData); saveData(cloudData); }
       }
-      setSyncing(false);setLastSync(new Date());
+      setSyncing(false); setLastSync(new Date());
     });
   },[]);
 
@@ -540,7 +668,7 @@ export default function App() {
     },1500);
   },[data]);
 
-  const totalPending=COMPANIES.reduce((acc,c)=>acc+data[c.id].clients.reduce((a,cl)=>a+(cl.todos||[]).filter(t=>!t.done).length,0),0);
+  const totalPending=companies.reduce((acc,c)=>acc+(data[c.id]?.clients||[]).reduce((a,cl)=>a+(cl.todos||[]).filter(t=>!t.done).length,0),0);
 
   return (
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#F5F7FF 0%,#F0FFF8 50%,#FFF5F0 100%)",fontFamily:"'DM Sans','Segoe UI',system-ui,sans-serif",padding:"0 0 48px"}}>
@@ -562,6 +690,10 @@ export default function App() {
             <div style={{fontWeight:800,fontSize:15,color:"#111",letterSpacing:"-0.02em"}}>Roadmap PM</div>
             <div style={{fontSize:11,color:"#999",fontWeight:500}}>Wilmer Rodríguez · Ciclo de negocio por cliente</div>
           </div>
+          <button onClick={()=>setShowSettings(true)} title="Gestionar empresas"
+            style={{marginLeft:4,background:"#F5F5F5",border:"none",borderRadius:8,width:30,height:30,cursor:"pointer",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            ⚙️
+          </button>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           {syncing&&<span style={{fontSize:11,color:"#AAA",display:"flex",alignItems:"center",gap:4}}><span style={{display:"inline-block",animation:"spin 0.8s linear infinite"}}>⚙️</span> Sync...</span>}
@@ -577,15 +709,15 @@ export default function App() {
           <p style={{color:"#888",fontSize:14,margin:0}}>Ciclo completo por cliente: graba reuniones 🎙️, extrae to-do's automáticamente ✨ y sincroniza en la nube ☁️</p>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:20}}>
-          {COMPANIES.map(c=>(<CompanyPanel key={c.id} company={c} data={data[c.id]} onChange={nd=>setData(p=>({...p,[c.id]:nd}))}/>))}
+          {companies.map(c=>(<CompanyPanel key={c.id} company={c} data={data[c.id]||{clients:[]}} onChange={nd=>setData(p=>({...p,[c.id]:nd}))}/>))}
         </div>
 
-        {COMPANIES.some(c=>data[c.id].clients.length>0)&&(
+        {companies.some(c=>(data[c.id]?.clients||[]).length>0)&&(
           <div style={{marginTop:28,background:"#fff",borderRadius:16,border:"1.5px solid #EFEFEF",padding:"18px 22px",boxShadow:"0 2px 16px rgba(0,0,0,0.05)"}}>
             <div style={{fontWeight:800,fontSize:14,color:"#111",marginBottom:14,letterSpacing:"-0.01em"}}>📊 Resumen General</div>
             <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-              {COMPANIES.map(co=>{
-                const clients=data[co.id].clients;
+              {companies.map(co=>{
+                const clients=data[co.id]?.clients||[];
                 if(clients.length===0) return null;
                 const pending=clients.reduce((a,c)=>a+(c.todos||[]).filter(t=>!t.done).length,0);
                 const done=clients.reduce((a,c)=>a+(c.todos||[]).filter(t=>t.done).length,0);
@@ -615,6 +747,13 @@ export default function App() {
           </div>
         )}
       </div>
+      {showSettings&&(
+        <CompanySettingsModal
+          companies={companies}
+          onClose={()=>setShowSettings(false)}
+          onSave={(updated)=>setCompanies(updated)}
+        />
+      )}
     </div>
   );
 }
