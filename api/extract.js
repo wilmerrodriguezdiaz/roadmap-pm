@@ -38,7 +38,11 @@ Responde ÚNICAMENTE con JSON válido sin backticks:
 
     const data = await response.json();
     const raw = data.choices?.[0]?.message?.content || '{"todos":[]}';
-    const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    // Find JSON object in response even if there's surrounding text
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return res.status(200).json({ todos: [] });
+    const parsed = JSON.parse(match[0]);
     return res.status(200).json({ todos: parsed.todos || [] });
   } catch (err) {
     console.error('Extract error:', err);
