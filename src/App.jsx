@@ -1,16 +1,16 @@
 import { useState, useRef, useEffect } from "react";
 
-/* ─── SHEETS SYNC ────────────────────────────────────── */
-async function loadFromSheets() {
+/* ─── SUPABASE SYNC ──────────────────────────────────── */
+async function loadFromCloud() {
   try {
-    const res = await fetch('/api/sheets?action=load');
+    const res = await fetch('/api/sync');
     if (!res.ok) return null;
     return await res.json();
   } catch(e) { return null; }
 }
-async function saveToSheets(data) {
+async function saveToCloud(data) {
   try {
-    await fetch('/api/sheets', {
+    await fetch('/api/sync', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify(data),
     });
@@ -144,68 +144,86 @@ function ConvEntry({conv,color,onDelete}) {
 
 /* ─── VOICE RECORDER ─────────────────────────────────── */
 function VoiceRecorder({color,accent,onTranscript}) {
-  const [mode,setMode]=useState(null); // null | 'recording' | 'processing' | 'done'
+  const [mode,setMode]=useState(null); // null | 'recording' | 'processing' | 'done' | 'upload'
   const [transcript,setTranscript]=useState("");
-  const [liveText,setLiveText]=useState("");
-  const recognitionRef=useRef(null);
+  const [elapsed,setElapsed]=useState(0);
   const mediaRef=useRef(null);
   const chunksRef=useRef([]);
+  const timerRef=useRef(null);
 
-  const startLive = () => {
-    const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){ alert("Tu navegador no soporta reconocimiento de voz. Usa Safari en iOS."); return; }
-    const r = new SR();
-    r.lang="es-CO"; r.continuous=true; r.interimResults=true;
-    let final="";
-    r.onresult=e=>{
-      let interim="";
-      for(let i=e.resultIndex;i<e.results.length;i++){
-        if(e.results[i].isFinal) final+=e.results[i][0].transcript+" ";
-        else interim+=e.results[i][0].transcript;
-      }
-      setLiveText(final+interim);
-      setTranscript(final);
-    };
-    r.onerror=()=>setMode(null);
-    r.onend=()=>{ if(mode==="recording") r.start(); };
-    recognitionRef.current=r;
-    r.start();
-    setMode("recording");
-    setLiveText("");
-    setTranscript("");
+  const startLive = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      const mr = new MediaRecorder(stream, {mimeType:'audio/webm'});
+      chunksRef.current=[];
+      mr.ondataavailable=e=>{ if(e.data.size>0) chunksRef.current.push(e.data); };
+      mr.start(1000);
+      mediaRef.current=mr;
+      setElapsed(0);
+      setMode("recording");
+      timerRef.current=setInterval(()=>setElapsed(p=>p+1),1000);
+    } catch(e) {
+      alert("No se pudo acceder al micrófono. Verifica los permisos en Safari.");
+    }
   };
 
   const stopLive = () => {
-    recognitionRef.current?.stop();
-    setMode("done");
+    clearInterval(timerRef.current);
+    if(mediaRef.current && mediaRef.current.state!=="inactive"){
+      mediaRef.current.onstop = async () => {
+        const blob = new Blob(chunksRef.current,{type:'audio/webm'});
+        mediaRef.current.stream.getTracks().forEach(t=>t.stop());
+        await processAudio(blob,'audio/webm');
+      };
+      mediaRef.current.stop();
+    }
+    setMode("processing");
   };
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if(!file) return;
     setMode("processing");
-    // Use Web Speech API via audio element is not possible directly
-    // So we read the file and show it as uploaded, then let user confirm
-    const reader = new FileReader();
-    reader.onload = () => {
-      // We can't transcribe audio files without a backend API
-      // So we show a message and let user type/paste the transcript
-      setMode("upload_manual");
-    };
-    reader.readAsArrayBuffer(file);
+    await processAudio(file, file.type);
+  };
+
+  const processAudio = async (blob, mimeType) => {
+    setMode("processing");
+    try {
+      const base64 = await new Promise((res,rej)=>{
+        const reader = new FileReader();
+        reader.onload=()=>res(reader.result.split(',')[1]);
+        reader.onerror=rej;
+        reader.readAsDataURL(blob);
+      });
+      const response = await fetch('/api/transcribe',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({audioBase64:base64, mimeType}),
+      });
+      const data = await response.json();
+      if(data.text){
+        setTranscript(data.text);
+        setMode("done");
+      } else {
+        setMode("upload");
+      }
+    } catch(e) {
+      setMode("upload");
+    }
   };
 
   const confirmTranscript = () => {
     if(transcript.trim()) onTranscript(transcript.trim());
-    setMode(null);
-    setTranscript("");
-    setLiveText("");
+    setMode(null); setTranscript(""); setElapsed(0);
   };
+
+  const fmt = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
 
   if(mode===null) return (
     <div style={{display:"flex",gap:8,marginBottom:12}}>
       <button onClick={startLive} style={{flex:1,padding:"10px",borderRadius:10,border:`1.5px solid ${color}44`,background:accent,color,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-        🎙️ Grabar reunión en vivo
+        🎙️ Grabar reunión
       </button>
       <label style={{flex:1,padding:"10px",borderRadius:10,border:`1.5px solid ${color}44`,background:accent,color,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
         📎 Subir audio
@@ -215,45 +233,48 @@ function VoiceRecorder({color,accent,onTranscript}) {
   );
 
   if(mode==="recording") return (
-    <div style={{background:accent,borderRadius:10,padding:"12px 14px",marginBottom:12,border:`1.5px solid ${color}44`}}>
-      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+    <div style={{background:accent,borderRadius:10,padding:"12px 14px",marginBottom:12,border:`1.5px solid #EF444444`}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
         <span style={{width:10,height:10,borderRadius:"50%",background:"#EF4444",display:"inline-block",animation:"pulse 1s infinite"}}/>
-        <span style={{fontSize:13,fontWeight:700,color:"#EF4444"}}>Grabando...</span>
-        <button onClick={stopLive} style={{marginLeft:"auto",background:"#EF4444",border:"none",borderRadius:8,padding:"5px 12px",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⏹ Detener</button>
-      </div>
-      <div style={{fontSize:12,color:"#555",lineHeight:1.6,minHeight:60,whiteSpace:"pre-wrap"}}>{liveText||"Habla... la transcripción aparecerá aquí"}</div>
-    </div>
-  );
-
-  if(mode==="done") return (
-    <div style={{background:accent,borderRadius:10,padding:"12px 14px",marginBottom:12,border:`1.5px solid ${color}44`}}>
-      <div style={{fontSize:12,fontWeight:700,color:"#555",marginBottom:6}}>📝 Transcripción — edita si es necesario:</div>
-      <textarea value={transcript} onChange={e=>setTranscript(e.target.value)}
-        style={{width:"100%",minHeight:100,padding:"8px 10px",borderRadius:8,border:`1px solid ${color}33`,fontSize:12,lineHeight:1.6,fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box"}}/>
-      <div style={{display:"flex",gap:8,marginTop:8}}>
-        <Btn onClick={confirmTranscript} color={color} small disabled={!transcript.trim()}>✅ Usar esta transcripción</Btn>
-        <Btn onClick={()=>{setMode(null);setTranscript("");}} color="#999" outline small>Cancelar</Btn>
-      </div>
-    </div>
-  );
-
-  if(mode==="upload_manual") return (
-    <div style={{background:accent,borderRadius:10,padding:"12px 14px",marginBottom:12,border:`1.5px solid ${color}44`}}>
-      <div style={{fontSize:12,fontWeight:700,color:"#555",marginBottom:4}}>📎 Audio subido</div>
-      <div style={{fontSize:11,color:"#888",marginBottom:8}}>Pega o escribe la transcripción del audio:</div>
-      <textarea value={transcript} onChange={e=>setTranscript(e.target.value)}
-        placeholder="Escribe o pega la transcripción aquí..."
-        style={{width:"100%",minHeight:100,padding:"8px 10px",borderRadius:8,border:`1px solid ${color}33`,fontSize:12,lineHeight:1.6,fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box"}}/>
-      <div style={{display:"flex",gap:8,marginTop:8}}>
-        <Btn onClick={confirmTranscript} color={color} small disabled={!transcript.trim()}>✅ Usar esta transcripción</Btn>
-        <Btn onClick={()=>setMode(null)} color="#999" outline small>Cancelar</Btn>
+        <span style={{fontSize:13,fontWeight:700,color:"#EF4444"}}>Grabando {fmt(elapsed)}</span>
+        <span style={{fontSize:11,color:"#AAA",marginLeft:4}}>Identificando hablantes con IA...</span>
+        <button onClick={stopLive} style={{marginLeft:"auto",background:"#EF4444",border:"none",borderRadius:8,padding:"6px 14px",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⏹ Detener</button>
       </div>
     </div>
   );
 
   if(mode==="processing") return (
-    <div style={{background:accent,borderRadius:10,padding:"12px 14px",marginBottom:12,textAlign:"center",color:"#888",fontSize:13}}>
-      ⚙️ Procesando audio...
+    <div style={{background:accent,borderRadius:10,padding:"14px",marginBottom:12,textAlign:"center"}}>
+      <div style={{fontSize:13,fontWeight:700,color:"#555",marginBottom:4}}>
+        <span style={{display:"inline-block",animation:"spin 0.8s linear infinite"}}>⚙️</span> Procesando audio con IA...
+      </div>
+      <div style={{fontSize:11,color:"#AAA"}}>Identificando hablantes · Esto toma ~30 segundos</div>
+    </div>
+  );
+
+  if(mode==="done") return (
+    <div style={{background:accent,borderRadius:10,padding:"12px 14px",marginBottom:12,border:`1.5px solid ${color}44`}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#555",marginBottom:6}}>🎙️ Transcripción con hablantes — edita si es necesario:</div>
+      <textarea value={transcript} onChange={e=>setTranscript(e.target.value)}
+        style={{width:"100%",minHeight:120,padding:"8px 10px",borderRadius:8,border:`1px solid ${color}33`,fontSize:12,lineHeight:1.8,fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box"}}/>
+      <div style={{display:"flex",gap:8,marginTop:8}}>
+        <Btn onClick={confirmTranscript} color={color} small disabled={!transcript.trim()}>✅ Usar transcripción</Btn>
+        <Btn onClick={()=>{setMode(null);setTranscript("");}} color="#999" outline small>Cancelar</Btn>
+      </div>
+    </div>
+  );
+
+  if(mode==="upload") return (
+    <div style={{background:accent,borderRadius:10,padding:"12px 14px",marginBottom:12,border:`1.5px solid ${color}44`}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#555",marginBottom:4}}>📝 Escribe o pega la transcripción:</div>
+      <textarea value={transcript} onChange={e=>setTranscript(e.target.value)}
+        placeholder="[Wilmer]: Buenos días, vamos a revisar la propuesta...
+[Cliente]: Sí, tenemos dudas sobre el precio..."
+        style={{width:"100%",minHeight:100,padding:"8px 10px",borderRadius:8,border:`1px solid ${color}33`,fontSize:12,lineHeight:1.6,fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box"}}/>
+      <div style={{display:"flex",gap:8,marginTop:8}}>
+        <Btn onClick={confirmTranscript} color={color} small disabled={!transcript.trim()}>✅ Usar transcripción</Btn>
+        <Btn onClick={()=>setMode(null)} color="#999" outline small>Cancelar</Btn>
+      </div>
     </div>
   );
 
@@ -643,7 +664,7 @@ export default function App() {
 
   useEffect(()=>{
     setSyncing(true);
-    loadFromSheets().then(cloudData=>{
+    loadFromCloud().then(cloudData=>{
       if(cloudData && cloudData._ts){
         const local = loadData();
         const localTs = local._ts || 0;
@@ -664,7 +685,7 @@ export default function App() {
     if(syncTimer.current) clearTimeout(syncTimer.current);
     syncTimer.current=setTimeout(()=>{
       setSyncing(true);
-      saveToSheets(stamped).then(()=>{setSyncing(false);setLastSync(new Date());});
+      saveToCloud(stamped).then(()=>{setSyncing(false);setLastSync(new Date());});
     },1500);
   },[data]);
 
