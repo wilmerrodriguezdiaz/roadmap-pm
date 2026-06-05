@@ -662,32 +662,62 @@ export default function App() {
   // Keep COMPANIES in sync with state
   useEffect(()=>{ COMPANIES = companies; saveCompanies(companies); },[companies]);
 
+  // On mount: always load from cloud first
   useEffect(()=>{
     setSyncing(true);
     loadFromCloud().then(cloudData=>{
-      if(cloudData && cloudData._ts){
-        const local = loadData();
-        const localTs = local._ts || 0;
-        const cloudTs = cloudData._ts || 0;
-        if(cloudTs > localTs){ setData(cloudData); saveData(cloudData); }
-      } else if(cloudData && cloudData.bgh){
-        const local = loadData();
-        const localHasData = companies.some(c => local[c.id]?.clients?.length > 0);
-        if(!localHasData){ setData(cloudData); saveData(cloudData); }
+      if(cloudData && (cloudData.bgh || cloudData._ts)){
+        const { _ts, ...cleanData } = cloudData;
+        setData(p => {
+          // Merge: cloud wins for clients, keep local if cloud is empty
+          const merged = {};
+          companies.forEach(c => {
+            const cloudClients = cleanData[c.id]?.clients || [];
+            const localClients = p[c.id]?.clients || [];
+            merged[c.id] = { clients: cloudClients.length > 0 ? cloudClients : localClients };
+          });
+          saveData(merged);
+          return merged;
+        });
       }
       setSyncing(false); setLastSync(new Date());
     });
   },[]);
 
+  // On every change: save locally + sync to cloud immediately
   useEffect(()=>{
-    const stamped = {...data, _ts: Date.now()};
-    saveData(stamped);
+    saveData(data);
     if(syncTimer.current) clearTimeout(syncTimer.current);
     syncTimer.current=setTimeout(()=>{
       setSyncing(true);
-      saveToCloud(stamped).then(()=>{setSyncing(false);setLastSync(new Date());});
-    },1500);
+      saveToCloud({...data, _ts: Date.now()}).then(()=>{
+        setSyncing(false); setLastSync(new Date());
+      });
+    },800);
   },[data]);
+
+  // Poll cloud every 30 seconds to catch updates from other devices
+  useEffect(()=>{
+    const interval = setInterval(()=>{
+      loadFromCloud().then(cloudData=>{
+        if(!cloudData) return;
+        const { _ts, ...cleanData } = cloudData;
+        const cloudTs = _ts || 0;
+        const localTs = loadData()._ts || 0;
+        if(cloudTs > localTs + 2000){ // cloud is newer by >2s
+          setData(p => {
+            const merged = {};
+            companies.forEach(c => {
+              merged[c.id] = cleanData[c.id] || { clients: [] };
+            });
+            saveData({...merged, _ts: cloudTs});
+            return merged;
+          });
+        }
+      });
+    }, 30000);
+    return () => clearInterval(interval);
+  },[]);
 
   const totalPending=companies.reduce((acc,c)=>acc+(data[c.id]?.clients||[]).reduce((a,cl)=>a+(cl.todos||[]).filter(t=>!t.done).length,0),0);
 
